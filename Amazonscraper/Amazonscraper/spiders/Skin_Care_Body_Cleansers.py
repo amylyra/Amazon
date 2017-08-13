@@ -11,14 +11,12 @@ import json
 from time import sleep
 from scrapy.selector import Selector
 
-
-class LuxurybeautyhaircareSpider(scrapy.Spider):
-    name = "LuxuryBeautyHairCare"
+class SkinCareBodyCleansersSpider(scrapy.Spider):
+    name = "Skin_Care_Body_Cleansers"
     allowed_domains = ["amazon.com"]
 
     proxy_lists = proxylist.proxys
     useragent_lists = useragent.user_agent_list
-    page_count = 0
 
     baseUrl = "https://www.amazon.com"
 
@@ -26,6 +24,11 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
         'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
         'Accept-Encoding':'gzip, deflate, br',
         'Accept-Language':'en-GB,en-US;q=0.8,en;q=0.6',
+        'Cache-Control':'max-age=0',
+        'Connection':'keep-alive',
+        'Host':'www.amazon.com',
+        'Upgrade-Insecure-Requests':'1',
+        'User-Agent':useragent_lists[random.randrange(0, len(useragent_lists))],   
     }
 
     def set_proxies(self, url, callback, headers=None):
@@ -42,9 +45,10 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
 
     def start_requests(self):
         print "====== Start ======"
-
-        # Luxury Beauty : Hair Care
-        url = "https://www.amazon.com/Hair-Shampoo-Luxury-Beauty-Products/b/ref=lxbeauty_haircare_leftnav?ie=UTF8&node=7437330011&pf_rd_m=ATVPDKIKX0DER&pf_rd_s=merchandised-search-leftnav&pf_rd_r=B0MXAGMEJG4CAHE7S8XQ&pf_rd_r=B0MXAGMEJG4CAHE7S8XQ&pf_rd_t=101&pf_rd_p=b6e90c6b-ae6e-45cd-9c68-2fb43609cf4a&pf_rd_p=b6e90c6b-ae6e-45cd-9c68-2fb43609cf4a&pf_rd_i=7175545011"
+        
+        # Beauty & Personal Care : Skin Care : Body : Cleansers
+        url = "https://www.amazon.com/s/ref=lp_11060711_nr_n_2?fst=as%3Aoff&rh=n%3A3760911%2Cn%3A%2111055981%2Cn%3A11060451%2Cn%3A11060711%2Cn%3A11061091&bbn=11060711&ie=UTF8&qid=1502339219&rnid=11060711"
+        
         req = self.set_proxies(url, self.getData, headers=self.headers)
         yield req
 
@@ -62,18 +66,24 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
             req.meta['page_url'] = itemUrl
             yield req
 
+            # return
+        # test
+        # self.page_count = self.page_count + 1
+        # if self.page_count==6:
+        #     return
         nextUrl = response.xpath('//a[@title="Next Page"]/@href').extract_first()
 
         if nextUrl:
             nextPage = self.baseUrl + nextUrl
-
+            # print "------------------"
+            # print nextPage
             req = self.set_proxies(nextPage, self.getData, headers=self.headers)
             req.meta['page_url'] = itemUrl
 
             yield req            
 
     def getDetail(self, response):
-        print "====== Get Detail ======"
+        # print "====== Get Detail ======"
 
         item = AmazonscraperItem()
 
@@ -84,6 +94,8 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
         item['ASIN'] = asin
 
         brand = ''.join(response.xpath('//div[@id="brandBarLogoWrapper"]//img/@alt').extract()).strip()
+        if brand == "":
+            brand = ''.join(response.xpath('//div[@id="mbc"]/@data-brand').extract()).strip()        
         item['Brand_Name'] = brand
 
         product_name = ''.join(response.xpath('//h1[@id="title"]//text()').extract()).strip()
@@ -91,6 +103,8 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
         # print product_name
 
         catetxt = response.xpath('//span[@class="zg_hrsr_ladder"][1]//text()').extract()
+        # print catetxt
+        # return
         try:
             del catetxt[0]
         except:
@@ -101,7 +115,8 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
 
         rankSummary = {}
         rankingText1 = ''.join(response.xpath('//li[@id="SalesRank"]/text()').extract()).strip()
-
+        # print rankingText
+        # print "----------------"
         rank1 = rankingText1.replace("#", "").replace(" ()", "")
         rankSummary['category rank'] = rank1
 
@@ -123,7 +138,8 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
         item['Price'] = price
         # print price
 
-        sentence = response.xpath('//div[@id="visual-rich-product-description"]//div[contains(@class, "a-column a-span4")]')
+        Description = ""
+        sentence = response.xpath('//div[@id="visual-rich-product-description"]//div[contains(@class, "a-section a-text-left visualRpdColumnSmall")]')
         # print len(sentence)
         for element in sentence:
             # print "----------------"
@@ -144,6 +160,13 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
                 item['Suggested_Use'] = Suggested_Use
                 # print Suggested_Use
 
+        if Description=="":
+            Description = ''.join(response.xpath('//div[@id="productDescription"]//p/text()').extract()).strip()
+            item['Description'] = Description
+
+        importantInfo = ''.join(response.xpath('//div[@class="bucket"]/div[@class="content"]/text()').extract()).strip()
+        if importantInfo:
+            item['Important_Info'] = importantInfo
 
         rating = ''.join(response.xpath('//div[@id="reviewSummary"]//span[@class="a-icon-alt"]/text()').extract()).strip()
         item['Rating'] = rating
@@ -180,7 +203,7 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
         reviewList = []
 
         customReviewUrl = ''.join(response.xpath('//a[@id="dp-summary-see-all-reviews"]/@href').extract()).strip()
-
+        # customReviewUrl = customReviewUrl.split("/")[0]
         if customReviewUrl:
 
             try:
@@ -188,14 +211,19 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
             except:
                 pass
             url = self.baseUrl + customReviewUrl + "ref=cm_cr_arp_d_show_all?ie=UTF8&reviewerType=all_reviews&pageNumber=1"
+            # url = "https://www.amazon.com/Mario-Badescu-Facial-Spray-Rosewater/product-reviews/B002LC9OES/ref=cm_cr_dp_d_show_all_top?ie=UTF8&reviewerType=avp_only_reviews"
             
             s = requests.Session()        
             while True:        
                 s.cookies.clear()                
-                agent = config.rotateAgent()            
+                agent = config.rotateAgent()        
+                # print "++++++++++++++++++++"        
+                # print agent        
+                # print "++++++++++++++++++++"        
                 proxy = config.rotateProxy()        
                 proxies = {'http':'http://{}@{}'.format(config.proxy_auth, proxy), 'https':'http://{}@{}'.format(config.proxy_auth, proxy)}
                 res = s.request('GET', url, headers = self.headers, proxies = proxies)                
+                # print res.status_code
                 if res.status_code == 200:
                     break
                 else:
@@ -204,6 +232,7 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
             r = res.text
             htmlText = Selector(text=r)
             
+            # total_review_count = ''.join(htmlText.xpath('//li[@data-reftag="cm_cr_arp_d_paging_btm"][last()]/a/text()').extract()).strip()        
             total_review = reviews.replace(",", "")
             total_review_count = int(total_review)/10
             total_review_mod = int(total_review)%10
@@ -257,10 +286,13 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
                     while True:        
                         s.cookies.clear()                
                         agent = config.rotateAgent()        
+                        # print "++++++++++++++++++++"        
+                        # print agent        
+                        # print "++++++++++++++++++++"        
                         proxy = config.rotateProxy()        
                         proxies = {'http':'http://{}@{}'.format(config.proxy_auth, proxy), 'https':'http://{}@{}'.format(config.proxy_auth, proxy)}
                         res = s.request('GET', url, headers = self.headers, proxies = proxies)                
-
+                        # print res.status_code
                         if res.status_code == 200:
                             break
                         else:
@@ -269,6 +301,7 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
                     r = res.text
                     htmlText = Selector(text=r)
                     reviewitems = htmlText.xpath('//div[@id="cm_cr-review_list"]/div[@class="a-section review"]')
+                    
                     for element in reviewitems:
                         sitem ={}
 
@@ -304,7 +337,6 @@ class LuxurybeautyhaircareSpider(scrapy.Spider):
                         
                         reviewList.append(sitem) 
 
-            item["Consumer_Reviews"] = reviewList
-
+            	item["Consumer_Reviews"] = reviewList
         # print customReviewUrl
         yield item
