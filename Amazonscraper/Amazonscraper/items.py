@@ -24,3 +24,4 @@ class AmazonscraperItem(scrapy.Item):
     Consumer_Reviews = scrapy.Field()
     ReviewSummary = scrapy.Field()
     Page_url = scrapy.Field()
+    Important_Info  = scrapy.Field()

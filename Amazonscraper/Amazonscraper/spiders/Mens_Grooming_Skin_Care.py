@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 import scrapy
-import useragent
-import proxylist
 import config
 from scrapy.http import Request
 from Amazonscraper.items import AmazonscraperItem
@@ -10,33 +8,26 @@ import time, re, random, base64, csv
 import json
 from time import sleep
 from scrapy.selector import Selector
-
+import datetime
 
 class MensGroomingSkinCareSpider(scrapy.Spider):
     name = "Mens_Grooming_Skin_Care"
     allowed_domains = ["amazon.com"]
 
-    proxy_lists = proxylist.proxys
-    useragent_lists = useragent.user_agent_list
-
+    proxy_lists = config.proxies
+    useragent_lists = config.agents
+    total = 0
     baseUrl = "https://www.amazon.com"
 
     headers = {
-        'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Encoding':'gzip, deflate, br',
-        'Accept-Language':'en-GB,en-US;q=0.8,en;q=0.6',
-        'Cache-Control':'max-age=0',
-        'Connection':'keep-alive',
-        'Host':'www.amazon.com',
-        'Upgrade-Insecure-Requests':'1',
-        'User-Agent':useragent_lists[random.randrange(0, len(useragent_lists))],   
+        'User-Agent': useragent_lists[random.randrange(0, len(useragent_lists))],
     }
 
     def set_proxies(self, url, callback, headers=None):
 
         req = Request(url=url, callback=callback, dont_filter=True, headers= headers)
         proxy_url = self.proxy_lists[random.randrange(0,len(self.proxy_lists))]
-        user_pass=base64.encodestring(b'username:password').strip().decode('utf-8')
+        user_pass=base64.encodestring(config.proxy_auth).strip().decode('utf-8')
         req.meta['proxy'] = "http://" + proxy_url
         req.headers['Proxy-Authorization'] = 'Basic ' + user_pass
         user_agent = self.useragent_lists[random.randrange(0, len(self.useragent_lists))]
@@ -44,264 +35,258 @@ class MensGroomingSkinCareSpider(scrapy.Spider):
 
         return req
 
+
     def start_requests(self):
-        print "====== Start ======"
+        self.clearLog()
+        self.makeLog("Start")
 
         # Beauty & Personal Care : Men's Grooming : Skin Care
         url = "https://www.amazon.com/b/ref=s9_acss_bw_cg_BeautCat_3d1_w?node=6706811011&pf_rd_m=ATVPDKIKX0DER&pf_rd_s=merchandised-search-3&pf_rd_r=T7T77BCMAEMSDJHX1MK5&pf_rd_t=101&pf_rd_p=1c2f98c9-1111-4ce1-bce3-7a009b92b6e3&pf_rd_i=11060451"
         
         req = self.set_proxies(url, self.getData, headers=self.headers)
         yield req
-
     def getData(self, response):
         print "===== Get Data ====="
+      
+        try:
+            if "To discuss automated access to Amazon data please contact" in response.body:
+                print "========= > None data"
+                req = self.set_proxies(response.url, self.getData, headers=self.headers)
+                sleep(2)
+                yield req
 
-        itemPaths = response.xpath('//ul[contains(@class, "s-result-list")]/li[contains(@id, "result")]')
-        for cc, element in enumerate(itemPaths):
-            itemUrl = element.xpath('.//a[@class="a-link-normal s-access-detail-page  s-color-twister-title-link a-text-normal"]/@href').extract_first()
-            # print itemUrl
-            if "/gp/slredirect/" in itemUrl:
-                continue
-            req = self.set_proxies(itemUrl, self.getDetail, headers=self.headers)
-            req.meta['page_url'] = itemUrl
-            yield req
+            itemPaths = response.xpath('//ul[contains(@class, "s-result-list")]/li[contains(@id, "result")]')
+            for cc, element in enumerate(itemPaths):
+                print "----------------------------"
+                itemUrl = element.xpath('.//a[@class="a-link-normal s-access-detail-page  s-color-twister-title-link a-text-normal"]/@href').extract_first()
+                # print itemUrl
+                if "/gp/slredirect/" in itemUrl:
+                    continue
 
-        nextUrl = response.xpath('//a[@title="Next Page"]/@href').extract_first()
+                item = AmazonscraperItem()
+                s = requests.Session()
+                error_count = 0
+                asin = ""
+                reviewList = []
+                reviewSummary = {}
 
-        if nextUrl:
-            nextPage = self.baseUrl + nextUrl
+                customReviewUrl = ""
+                while True:
+                    s.cookies.clear()
 
-            req = self.set_proxies(nextPage, self.getData, headers=self.headers)
-            req.meta['page_url'] = itemUrl
+                    agent = config.rotateAgent()
+                    proxy = config.rotateProxy()        
+                    print proxy
 
-            yield req            
+                    proxies = {'http':'http://{}@{}'.format(config.proxy_auth, proxy), 'https':'http://{}@{}'.format(config.proxy_auth, proxy)}
+                    try:
+                        res = s.request('GET', itemUrl, headers = self.headers, proxies = proxies)   
+                        # print itemUrl
+                    except:
+                        error_count = error_count + 1
+                        continue
 
-    def getDetail(self, response):
-        # print "====== Get Detail ======"
+                    if error_count==10:
+                        break
+                    # print res.status_code
+                    elif res.status_code == 200:
+                        if "To discuss automated access to Amazon data please contact" in res.content:
+                            print "==========> No none ========="
+                            # sleep(2)
+                            continue                            
+                        else:
+                            r = res.text
+                            htmlBody = Selector(text=r)
+                            asin = ''.join(htmlBody.xpath('//input[@id="ASIN"]/@value').extract()).strip()
+                            if asin != "":                                                 
+                                break                
+                            else:
+                                print "***** Asin None *****"
+                                # print htmlBody
+                                error_count = error_count + 1
+                                if error_count==10:
+                                    break
+                                continue
+                if error_count==10:
+                    continue
 
-        item = AmazonscraperItem()
+                catetxt = htmlBody.xpath('//ul[@class="a-unordered-list a-horizontal a-size-small"]//text()').extract()
+                cate = re.sub(" +", " ", re.sub("\s", " ", ''.join(catetxt)).strip())
+                
+                if "Beauty" and "Personal" not in cate:
+                    continue 
 
-        page_url = response.meta['page_url']
+                item['Category'] = cate
+                # print category 
 
-        header1 = {
-            'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Encoding':'gzip, deflate, br',
-            'Accept-Language':'en-GB,en-US;q=0.8,en;q=0.6',
-            'Connection':'keep-alive',
-            'Host':'www.amazon.com',
-            'Referer':page_url,
-            'Upgrade-Insecure-Requests':'1',
-            'User-Agent': self.useragent_lists[random.randrange(0, len(self.useragent_lists))],        
-        }
+                item['Page_url'] = itemUrl
+                item['ASIN'] = asin
 
-        item['Page_url'] = page_url
+                brand = ''.join(htmlBody.xpath('//div[@id="brandBarLogoWrapper"]//img/@alt').extract()).strip()
+                if brand == "":
+                    brand = ''.join(htmlBody.xpath('//div[@id="mbc"]/@data-brand').extract()).strip()        
+                item['Brand_Name'] = brand
 
-        asin = ''.join(response.xpath('//input[@id="ASIN"]/@value').extract()).strip()
-        item['ASIN'] = asin
+                product_name = ''.join(htmlBody.xpath('//h1[@id="title"]//text()').extract()).strip()
+                item['Product_Name'] = product_name
+                # print product_name
 
-        brand = ''.join(response.xpath('//div[@id="brandBarLogoWrapper"]//img/@alt').extract()).strip()
-        if brand == "":
-            brand = ''.join(response.xpath('//div[@id="mbc"]/@data-brand').extract()).strip()        
-        item['Brand_Name'] = brand
+                rankSummary = {}
+                rankingText1 = ''.join(htmlBody.xpath('//li[@id="SalesRank"]/text()').extract()).strip()
+                # print rankingText
+                # print "----------------"
+                rank1 = rankingText1.replace("#", "").replace(" ()", "")
+                rankSummary['category rank'] = rank1
 
-        product_name = ''.join(response.xpath('//h1[@id="title"]//text()').extract()).strip()
-        item['Product_Name'] = product_name
-        # print product_name
+                rankList = []
+                paths = htmlBody.xpath('//ul[@class="zg_hrsr"]/li')
+                for ele in paths:
 
-        catetxt = response.xpath('//ul[@class="a-unordered-list a-horizontal a-size-small"]//text()').extract()
-        cate = re.sub(" +", " ", re.sub("\s", " ", ''.join(catetxt)).strip())
-        item['Category'] = cate
-        # print category
+                    category = ''.join(ele.xpath('.//span[@class="zg_hrsr_ladder"]//text()').extract()).strip()
+                    rankingText2 = ''.join(ele.xpath('.//span[@class="zg_hrsr_rank"]/text()').extract()).strip()
+                    rankingText2 = rankingText2.replace("#", "")
+                    rank2 = rankingText2 + " " + category
+                    rankList.append(rank2)
 
-        rankSummary = {}
-        rankingText1 = ''.join(response.xpath('//li[@id="SalesRank"]/text()').extract()).strip()
-        # print rankingText
-        # print "----------------"
-        rank1 = rankingText1.replace("#", "").replace(" ()", "")
-        rankSummary['category rank'] = rank1
+                rankSummary['sub category rank'] = rankList 
+                # print ranking
+                item['Ranking'] = rankSummary
 
-        rankList = []
-        paths = response.xpath('//ul[@class="zg_hrsr"]/li')
-        for ele in paths:
+                price = ''.join(htmlBody.xpath('//span[contains(@id, "priceblock_")]/text()').extract()).strip()
+                item['Price'] = price
+                # print price
 
-            category = ''.join(ele.xpath('.//span[@class="zg_hrsr_ladder"]//text()').extract()).strip()
-            rankingText2 = ''.join(ele.xpath('.//span[@class="zg_hrsr_rank"]/text()').extract()).strip()
-            rankingText2 = rankingText2.replace("#", "")
-            rank2 = rankingText2 + " " + category
-            rankList.append(rank2)
+                Description = ""
+                sentence = htmlBody.xpath('//div[@id="visual-rich-product-description"]//div[contains(@class, "a-section a-text-left visualRpdColumnSmall")]')
+                # print len(sentence)
+                for element in sentence:
+                    # print "----------------"
+                    text = ''.join(element.xpath('.//h4/text()').extract()).strip()
 
-        rankSummary['sub category rank'] = rankList 
-        # print ranking
-        item['Ranking'] = rankSummary
+                    if "Description" in text:
+                        Description = ''.join(element.xpath('.//span[@class="a-size-small a-color-base visualRpdText"]/text()').extract()).strip()
+                        item['Description'] = Description
+                        # print Description
 
-        price = ''.join(response.xpath('//span[@id="priceblock_ourprice"]/text()').extract()).strip()
-        item['Price'] = price
-        # print price
+                    elif "Benefits" in text:
+                        Benefits = ''.join(element.xpath('.//span[@class="a-size-small a-color-base visualRpdText"]/text()').extract()).strip()
+                        item['Benefits'] = Benefits
+                        # print Benefits
 
-        Description = ""
-        sentence = response.xpath('//div[@id="visual-rich-product-description"]//div[contains(@class, "a-section a-text-left visualRpdColumnSmall")]')
-        # print len(sentence)
-        for element in sentence:
-            # print "----------------"
-            text = ''.join(element.xpath('.//h4/text()').extract()).strip()
+                    elif "Suggested" in text:
+                        Suggested_Use = ''.join(element.xpath('.//span[@class="a-size-small a-color-base visualRpdText"]/text()').extract()).strip()
+                        item['Suggested_Use'] = Suggested_Use
+                        # print Suggested_Use
 
-            if "Description" in text:
-                Description = ''.join(element.xpath('.//span[@class="a-size-small a-color-base visualRpdText"]/text()').extract()).strip()
-                item['Description'] = Description
-                # print Description
+                if Description=="":
+                    Description = ''.join(htmlBody.xpath('//div[@id="productDescription"]//p/text()').extract()).strip()
+                    item['Description'] = Description
 
-            elif "Benefits" in text:
-                Benefits = ''.join(element.xpath('.//span[@class="a-size-small a-color-base visualRpdText"]/text()').extract()).strip()
-                item['Benefits'] = Benefits
-                # print Benefits
+                importantInfo = ''.join(htmlBody.xpath('//div[@class="bucket"]/div[@class="content"]/text()').extract()).strip()
+                if importantInfo:
+                    item['Important_Info'] = importantInfo
 
-            elif "Suggested" in text:
-                Suggested_Use = ''.join(element.xpath('.//span[@class="a-size-small a-color-base visualRpdText"]/text()').extract()).strip()
-                item['Suggested_Use'] = Suggested_Use
-                # print Suggested_Use
+                rating = ''.join(htmlBody.xpath('//div[@id="reviewSummary"]//span[@class="a-icon-alt"]/text()').extract()).strip()
+                item['Rating'] = rating
+                # print rating
 
-        if Description=="":
-            Description = ''.join(response.xpath('//div[@id="productDescription"]//p/text()').extract()).strip()
-            item['Description'] = Description
+                reviews = ''.join(htmlBody.xpath('//div[@id="reviewSummary"]//span[@data-hook="total-review-count"]/text()').extract()).strip()
+                item['Reviews'] = reviews
+                # print reviews
 
-        importantInfo = ''.join(response.xpath('//div[@class="bucket"]/div[@class="content"]/text()').extract()).strip()
-        if importantInfo:
-            item['Important_Info'] = importantInfo
+                star5 = ''.join(htmlBody.xpath('//a[@class="a-size-base a-link-normal 5star histogram-review-count"]/text()').extract()).strip()
+                reviewSummary["5 star"] = star5
+                # print star5
 
-        rating = ''.join(response.xpath('//div[@id="reviewSummary"]//span[@class="a-icon-alt"]/text()').extract()).strip()
-        item['Rating'] = rating
-        # print rating
+                star4 = ''.join(htmlBody.xpath('//a[@class="a-size-base a-link-normal 4star histogram-review-count"]/text()').extract()).strip()
+                reviewSummary["4 star"] = star4
+                # print star4
 
-        reviews = ''.join(response.xpath('//div[@id="reviewSummary"]//span[@data-hook="total-review-count"]/text()').extract()).strip()
-        item['Reviews'] = reviews
-        # print reviews
+                star3 = ''.join(htmlBody.xpath('//a[@class="a-size-base a-link-normal 3star histogram-review-count"]/text()').extract()).strip()
+                reviewSummary["3 star"] = star3
+                # print star3
 
-        reviewSummary = {}
+                star2 = ''.join(htmlBody.xpath('//a[@class="a-size-base a-link-normal 2star histogram-review-count"]/text()').extract()).strip()
+                reviewSummary["2 star"] = star2
+                # print star2
 
-        star5 = ''.join(response.xpath('//a[@class="a-size-base a-link-normal 5star histogram-review-count"]/text()').extract()).strip()
-        reviewSummary["5 star"] = star5
-        # print star5
+                star1 = ''.join(htmlBody.xpath('//a[@class="a-size-base a-link-normal 1star histogram-review-count"]/text()').extract()).strip()
+                reviewSummary["1 star"] = star1
+                # print star1
 
-        star4 = ''.join(response.xpath('//a[@class="a-size-base a-link-normal 4star histogram-review-count"]/text()').extract()).strip()
-        reviewSummary["4 star"] = star4
-        # print star4
+                item['ReviewSummary'] = reviewSummary                 
 
-        star3 = ''.join(response.xpath('//a[@class="a-size-base a-link-normal 3star histogram-review-count"]/text()').extract()).strip()
-        reviewSummary["3 star"] = star3
-        # print star3
 
-        star2 = ''.join(response.xpath('//a[@class="a-size-base a-link-normal 2star histogram-review-count"]/text()').extract()).strip()
-        reviewSummary["2 star"] = star2
-        # print star2
+                print "*****************************************"
+                print "Reviews=", reviews
+                print "*****************************************"
 
-        star1 = ''.join(response.xpath('//a[@class="a-size-base a-link-normal 1star histogram-review-count"]/text()').extract()).strip()
-        reviewSummary["1 star"] = star1
-        # print star1
+                reviews = reviews.encode('utf-8')
 
-        item['ReviewSummary'] = reviewSummary
-        
-        reviewList = []
+                if reviews != "":
+                       
+                    customReviewUrl = ''.join(htmlBody.xpath('//a[@id="dp-summary-see-all-reviews"]/@href').extract()).strip()
+                    try:
+                        customReviewUrl = re.sub('(ref=.*)','',customReviewUrl)
 
-        customReviewUrl = ''.join(response.xpath('//a[@id="dp-summary-see-all-reviews"]/@href').extract()).strip()
-        # customReviewUrl = customReviewUrl.split("/")[0]
-        if customReviewUrl:
+                    except:
+                        pass
+                    reviewUrl = self.baseUrl + customReviewUrl + "ref=cm_cr_arp_d_show_all?ie=UTF8&reviewerType=all_reviews&pageNumber=1"
+                    # print reviewUrl
 
-            try:
-                customReviewUrl = re.sub('(ref=.*)','',customReviewUrl)
-            except:
-                pass
-            url = self.baseUrl + customReviewUrl + "ref=cm_cr_arp_d_show_all?ie=UTF8&reviewerType=all_reviews&pageNumber=1"
-            
-            s = requests.Session()        
-            while True:        
-                s.cookies.clear()                
-                agent = config.rotateAgent()        
-                # print "++++++++++++++++++++"        
-                # print agent        
-                # print "++++++++++++++++++++"        
-                proxy = config.rotateProxy()        
-                proxies = {'http':'http://{}@{}'.format(config.proxy_auth, proxy), 'https':'http://{}@{}'.format(config.proxy_auth, proxy)}
-                res = s.request('GET', url, headers = header1, proxies = proxies)                
-                # print res.status_code
-                if res.status_code == 200:
-                    break
-                else:
-                    time.sleep(3)
-
-            r = res.text
-            htmlText = Selector(text=r)
-            
-            total_review = reviews.replace(",", "")
-            total_review_count = int(total_review)/10
-            total_review_mod = int(total_review)%10
-            if total_review_mod != 0:
-                total_review_count = total_review_count + 1
-            if total_review_count<0:
-                total_review_count = 1
-
-            reviewitems = htmlText.xpath('//div[@id="cm_cr-review_list"]/div[@class="a-section review"]')
-
-            for element in reviewitems:
-                sitem = {}
-
-                # print "-----------------------"
-                review_rating = ''.join(element.xpath('.//i[@data-hook="review-star-rating"]/span/text()').extract()).strip()
-                sitem["review_rating"] = review_rating
-                # print review_rating
-
-                review_title = ''.join(element.xpath('.//a[@data-hook="review-title"]/text()').extract()).strip()
-                sitem["review_title"] = review_title
-                # print review_title
-
-                is_verified_purchase = ''.join(element.xpath('.//span[@data-hook="avp-badge"]/text()').extract()).strip()
-                sitem["is_verified_purchase"] = is_verified_purchase
-                # print is_verified_purchase
-
-                reviewer_name = ''.join(element.xpath('.//a[@data-hook="review-author"]/text()').extract()).strip()
-                sitem["reviewer_name"] = reviewer_name
-                # print reviewer_name
-
-                review_date = ''.join(element.xpath('.//span[@data-hook="review-date"]/text()').extract()).strip()
-                review_date = review_date.replace("on ", "")
-                sitem["review_date"] = review_date
-                # print review_date
-
-                review_text = ''.join(element.xpath('.//span[@data-hook="review-body"]/text()').extract()).strip()
-                sitem["review_text"] = review_text
-                # print review_text
-
-                people_found_usefull = ''.join(element.xpath('.//span[@data-hook="helpful-vote-statement"]/text()').extract()).strip()
-                sitem["people_found_usefull"] = people_found_usefull
-                # print people_found_usefull
-
-                reviewList.append(sitem)
-            if total_review_count>1:
-
-                for page_count in range(2, total_review_count+1):
-
-                    url = self.baseUrl + customReviewUrl + "ref=cm_cr_arp_d_show_all?ie=UTF8&reviewerType=all_reviews&pageNumber=" + str(page_count)
-                           
+                    s = requests.Session()
+                    error_count1 = 0
                     while True:        
                         s.cookies.clear()                
                         agent = config.rotateAgent()        
-                        # print "++++++++++++++++++++"        
-                        # print agent        
-                        # print "++++++++++++++++++++"        
-                        proxy = config.rotateProxy()        
+   
+                        proxy = config.rotateProxy()  
+                        print proxy      
                         proxies = {'http':'http://{}@{}'.format(config.proxy_auth, proxy), 'https':'http://{}@{}'.format(config.proxy_auth, proxy)}
-                        res = s.request('GET', url, headers = header1, proxies = proxies)                
-                        # print res.status_code
-                        if res.status_code == 200:
-                            break
-                        else:
-                            time.sleep(3)
+                        try:
+                            res = s.request('GET', reviewUrl, headers = self.headers, proxies = proxies)    
+                        except:
+                            error_count1 = error_count1 + 1
+                            continue
 
-                    r = res.text
-                    htmlText = Selector(text=r)
-                    reviewitems = htmlText.xpath('//div[@id="cm_cr-review_list"]/div[@class="a-section review"]')
+                        if error_count1==10:
+                            break
+
+                        # print res.status_code
+                        elif res.status_code == 200:
+                            if "To discuss automated access to Amazon data please contact" in res.content:
+                                print "==========> No none ========="
+
+                                # sleep(2)
+                                continue                            
+                            else:
+                                r = res.text
+                                htmlText = Selector(text=r) 
+                                reviewitems = htmlText.xpath('//div[@id="cm_cr-review_list"]/div[@class="a-section review"]')
+                                if len(reviewitems)==0:
+                                    print "****** Review Items None ******"
+                                    error_count = error_count + 1
+                                    if error_count==10:
+                                        break                                    
+                                    continue                                                                        
+                                else:
+                                    break 
                     
+                    total_review = reviews.replace(",", "")
+                    total_review_count = int(total_review)/10
+                    total_review_mod = int(total_review)%10
+                    if total_review_mod != 0:
+                        total_review_count = total_review_count + 1
+                    if total_review_count<0:
+                        total_review_count = 1
+
+
+                    # print "*****************************************"
+                    # print "Review Count ==== >> " ,len(reviewitems)
+                    # print "*****************************************"
+
                     for element in reviewitems:
-                        sitem ={}
+                        sitem = {}
 
                         # print "-----------------------"
                         review_rating = ''.join(element.xpath('.//i[@data-hook="review-star-rating"]/span/text()').extract()).strip()
@@ -332,9 +317,137 @@ class MensGroomingSkinCareSpider(scrapy.Spider):
                         people_found_usefull = ''.join(element.xpath('.//span[@data-hook="helpful-vote-statement"]/text()').extract()).strip()
                         sitem["people_found_usefull"] = people_found_usefull
                         # print people_found_usefull
-                        
-                        reviewList.append(sitem) 
 
-                item["Consumer_Reviews"] = reviewList
-        # print customReviewUrl
-        yield item
+                        reviewList.append(sitem)
+                    # print total_review_count
+
+                    # print "*****************************************"
+                    # print "Total Review = ", total_review_count
+                    # print "*****************************************"
+                    if total_review_count>1:
+
+                        for page_count in range(2, total_review_count+1):
+
+                            reviewUrl = self.baseUrl + customReviewUrl + "ref=cm_cr_arp_d_paging_btm_next_" + str(page_count) + "?ie=UTF8&reviewerType=all_reviews&pageNumber=" + str(page_count)
+                                                                         
+                            error_count2 = 0
+                            s = requests.Session()
+                            while True:        
+                                s.cookies.clear()                
+                                agent = config.rotateAgent()        
+                                # print "++++++++++++++++++++"        
+                                # print agent        
+                                # print "++++++++++++++++++++"        
+                                proxy = config.rotateProxy()        
+                                proxies = {'http':'http://{}@{}'.format(config.proxy_auth, proxy), 'https':'http://{}@{}'.format(config.proxy_auth, proxy)}
+                                try:
+                                    res = s.request('GET', reviewUrl, headers = self.headers, proxies = proxies)    
+                                except:
+                                    error_count2 = error_count2 + 1
+                                    continue
+
+                                if error_count2==10:
+                                    break   
+
+                                elif res.status_code == 200:
+                                    if "To discuss automated access to Amazon data please contact" in res.content:
+                                        print "==========> No none ========="
+
+                                        # sleep(2)
+                                        continue                            
+                                    else:
+                                        r = res.text
+                                        htmlText = Selector(text=r) 
+                                        reviewitems = htmlText.xpath('//div[@id="cm_cr-review_list"]/div[@class="a-section review"]')
+                                        if len(reviewitems)==0:
+                                            print "****** Review Items None ******"
+                                            error_count = error_count + 1
+                                            if error_count==10:
+                                                break                                            
+                                            continue                                                                        
+                                        else:
+                                            break  
+
+                            # print "*****************************************"
+                            # print "Review Count 2 ==== >> " ,len(reviewitems)
+                            # print "*****************************************"                                
+
+                            for element in reviewitems:
+                                sitem ={}
+
+                                # print "-----------------------"
+                                review_rating = ''.join(element.xpath('.//i[@data-hook="review-star-rating"]/span/text()').extract()).strip()
+                                sitem["review_rating"] = review_rating
+                                # print review_rating
+
+                                review_title = ''.join(element.xpath('.//a[@data-hook="review-title"]/text()').extract()).strip()
+                                sitem["review_title"] = review_title
+                                # print review_title
+
+                                is_verified_purchase = ''.join(element.xpath('.//span[@data-hook="avp-badge"]/text()').extract()).strip()
+                                sitem["is_verified_purchase"] = is_verified_purchase
+                                # print is_verified_purchase
+
+                                reviewer_name = ''.join(element.xpath('.//a[@data-hook="review-author"]/text()').extract()).strip()
+                                sitem["reviewer_name"] = reviewer_name
+                                # print reviewer_name
+
+                                review_date = ''.join(element.xpath('.//span[@data-hook="review-date"]/text()').extract()).strip()
+                                review_date = review_date.replace("on ", "")
+                                sitem["review_date"] = review_date
+                                # print review_date
+
+                                review_text = ''.join(element.xpath('.//span[@data-hook="review-body"]/text()').extract()).strip()
+                                sitem["review_text"] = review_text
+                                # print review_text
+
+                                people_found_usefull = ''.join(element.xpath('.//span[@data-hook="helpful-vote-statement"]/text()').extract()).strip()
+                                sitem["people_found_usefull"] = people_found_usefull
+                                # print people_found_usefull
+                                
+                                reviewList.append(sitem) 
+
+                    item["Consumer_Reviews"] = reviewList
+                    # print customReviewUrl
+                yield item
+                # print item
+                reviewList = []
+                reviewSummary = {}
+                self.total = self.total + 1
+                print "*****************************************"
+                print "Total ===== > " + str(self.total)
+                print "page_url ===== > " + itemUrl
+                print "*****************************************"
+
+                # return
+            # test
+            # self.page_count = self.page_count + 1
+            # if self.page_count==6:
+            #     return
+
+            nextUrl = response.xpath('//a[@title="Next Page"]/@href').extract_first()
+
+            if nextUrl:
+                nextPage = self.baseUrl + nextUrl
+                # print "------------------"
+                # print nextPage
+                req = self.set_proxies(nextPage, self.getData, headers=self.headers)
+                self.makeLog(nextPage)
+                yield req
+               
+        except Exception as e:
+            print "******************Except**************"
+            print e
+            self.makeLog(itemUrl)
+
+    def makeLog(self, txt):
+
+        standartdate = datetime.datetime.now()
+        date = standartdate.strftime('%Y-%m-%d %H:%M:%S')
+        fout = open("log.txt", "a")
+        fout.write(str(date) + " -> " + txt + "\n")
+        fout.close()
+
+    def clearLog(self):
+        fout = open("log.txt", "w")
+        fout.close()
